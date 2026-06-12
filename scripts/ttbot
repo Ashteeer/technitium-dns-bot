@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  ttbot — управление сервисом Technitium DNS spoofing bot
+#
+#     ttbot --version            показать установленную версию
+#     ttbot --update [версия]    обновить с GitHub (по умолчанию — последняя)
+#     ttbot start | stop | restart
+#     ttbot status               статус сервиса
+#     ttbot logs [N]             логи (по умолчанию следим за хвостом)
+#     ttbot --help
+#
+#  Привилегированные команды (start/stop/restart/update/logs) при запуске не от
+#  root автоматически перезапускаются через sudo.
+# ============================================================================
+set -euo pipefail
+
+REPO="Ashteeer/technitium-dns-bot"
+INSTALL_DIR="/opt/technitium-bot"
+SERVICE="technitium-bot"
+VENV="$INSTALL_DIR/venv"
+SELF="ttbot"
+
+usage() {
+    cat <<EOF
+ttbot — управление сервисом Technitium DNS spoofing bot
+
+  ttbot --version            показать установленную версию
+  ttbot --update [версия]    обновить с GitHub (по умолчанию — последняя)
+  ttbot start | stop | restart
+  ttbot status               статус сервиса
+  ttbot logs [N]             логи (следим за хвостом, N строк истории)
+  ttbot --help               эта справка
+
+Привилегированные команды (start/stop/restart/update/logs) при запуске не от
+root автоматически перезапускаются через sudo.
+EOF
+}
+
+show_version() {
+    if [ -x "$VENV/bin/python" ]; then
+        "$VENV/bin/python" -m ttbot --version
+    else
+        echo "$SELF: не установлено (нет $VENV)"; exit 1
+    fi
+}
+
+do_update() {
+    local ver="${1:-}"
+    echo "Обновление technitium-bot${ver:+ до версии $ver}…"
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/main/INSTALL.sh" \
+        | bash -s -- ${ver:+"$ver"}
+}
+
+main() {
+    local cmd="${1:-help}"
+
+    # Привилегированные команды: перезапускаемся через sudo, если не root.
+    case "$cmd" in
+        start | stop | restart | --update | update | logs)
+            if [ "$(id -u)" -ne 0 ]; then
+                exec sudo -- "$0" "$@"
+            fi
+            ;;
+    esac
+
+    case "$cmd" in
+        --version | -v | version)
+            show_version
+            ;;
+        --update | update)
+            do_update "${2:-}"
+            ;;
+        start | stop | restart)
+            systemctl "$cmd" "$SERVICE"
+            systemctl is-active --quiet "$SERVICE" \
+                && echo "$SERVICE: active" || echo "$SERVICE: not active"
+            ;;
+        status)
+            systemctl status "$SERVICE" --no-pager
+            ;;
+        logs)
+            journalctl -u "$SERVICE" -n "${2:-100}" -f
+            ;;
+        --help | -h | help)
+            usage
+            ;;
+        *)
+            echo "Неизвестная команда: $cmd" >&2
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

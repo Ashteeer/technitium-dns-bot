@@ -1,0 +1,24 @@
+[Unit]
+Description=Technitium DNS spoofing Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Создайте отдельного пользователя:  sudo useradd --system --no-create-home --shell /usr/sbin/nologin ttbot
+User=ttbot
+Group=ttbot
+WorkingDirectory=/opt/technitium-bot
+ExecStart=/opt/technitium-bot/venv/bin/python -m ttbot --config /opt/technitium-bot/config.yaml
+Restart=on-failure
+RestartSec=5
+
+# Базовая изоляция
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/technitium-bot
+
+[Install]
+WantedBy=multi-user.target

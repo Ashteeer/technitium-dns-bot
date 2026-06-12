@@ -1,0 +1,8 @@
+# Единые переводы строк: в репозитории и при checkout — LF для всего текста.
+# Это критично для shell-скриптов (INSTALL.sh, scripts/ttbot): с CRLF они не
+# запустятся на Linux ("bad interpreter: /usr/bin/env bash^M").
+* text=auto eol=lf
+
+# Скрипты только для Windows — оставляем CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf

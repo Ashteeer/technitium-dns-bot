@@ -1,0 +1,6 @@
+# Runtime-зависимости для деплоя (pip install -r requirements.txt).
+# Источник истины — pyproject.toml ([project.dependencies]); этот файл держим
+# синхронным с ним для удобства установки на сервере без сборки пакета.
+python-telegram-bot[job-queue]>=21.6,<23
+aiohttp>=3.9
+PyYAML>=6.0

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "domain_suffix": [
+        "example-ads.com",
+        "tracker.net",
+        "doubleclick.net"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "metrics.example.org"
+      ]
+    }
+  ]
+}

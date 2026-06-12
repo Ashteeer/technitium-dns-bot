@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "technitium-dns-bot"
+description = "Telegram-бот управления подменой DNS-ответов в Technitium DNS Server"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ashteeer" }]
+keywords = ["telegram", "dns", "technitium", "spoofing", "bot"]
+dynamic = ["version"]
+dependencies = [
+    "python-telegram-bot[job-queue]>=21.6,<23",
+    "aiohttp>=3.9",
+    "PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ashteeer/technitium-dns-bot"
+Repository = "https://github.com/Ashteeer/technitium-dns-bot"
+Issues = "https://github.com/Ashteeer/technitium-dns-bot/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-PyYAML",
+]
+
+[project.scripts]
+technitium-bot = "ttbot.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["ttbot"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ttbot.__version__" }
+
+# --------------------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "BLE",  # flake8-blind-except
+    "C4",   # flake8-comprehensions
+]
+
+# --------------------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+# python-telegram-bot тащит сложные типы; для нашего кода достаточно трактовать
+# его как Any — это не снижает пользы проверки остальных модулей.
+[[tool.mypy.overrides]]
+module = ["telegram.*"]
+follow_imports = "skip"
+
+# --------------------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
