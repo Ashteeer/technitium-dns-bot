@@ -13,6 +13,27 @@
 1. **Интернет-списки** (JSON) — скачиваются по расписанию.
 2. **Правила пользователя** через Telegram-бота — имеют наивысший приоритет.
 
+## 🚀 Быстрый старт
+
+Установка на сервере Ubuntu **одной командой** (зависимости + бот + systemd-сервис
++ системная команда `ttbot`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ashteeer/technitium-dns-bot/main/INSTALL.sh | sudo bash
+```
+
+<details>
+<summary>Альтернатива через <code>wget</code></summary>
+
+```bash
+wget -qO- https://raw.githubusercontent.com/Ashteeer/technitium-dns-bot/main/INSTALL.sh | sudo bash
+```
+</details>
+
+Установщик спросит Telegram ID администратора и токен бота, затем покажет сводку.
+Конкретная версия — `... | sudo bash -s -- 1.0.0`. Подробности, ручная установка и
+управление — в разделе [Установка](#установка-ubuntu) и [docs/DEPLOY.md](docs/DEPLOY.md).
+
 ## Возможности
 
 - Обновление подмены из списков по интервалу. Добавляются **только новые** домены;
