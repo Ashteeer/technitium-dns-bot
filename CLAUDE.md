@@ -166,6 +166,14 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
 Запись атомарна: данные пишутся во временный файл и переименовываются
 (`os.replace`), что исключает повреждение при сбое.
 
+**`rules_file` (по умолчанию `rules.yaml`)** — отдельный *автогенерируемый*
+файл: `state.json` — внутреннее состояние, а `rules.yaml` — эффективные правила
+(списки + пользовательские, объединённые) в человекочитаемом виде для стороннего
+**Technitium App**. Перегенерируется при каждом изменении (`Reconciler.export_rules`
+→ `rules.build_rules`/`write_rules`). Формат: `{domain, apex, subdomains}` +
+`spoof_ipv4/ipv6`; домена нет в файле → App форвардит запрос наверх. Образец —
+`examples/rules.example.yaml`.
+
 ---
 
 ## 7. Telegram-интерфейс
@@ -180,6 +188,7 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
                 ├── 📋 Просмотреть правила  (нумерованный список)
                 ├── 🗑 Убрать правило        (по номеру)
                 ├── 🌐 Сменить IP подмены    (новый IP + пересоздание зон)
+                ├── 🔄 Обновить списки       (reload: перекачать + применить)
                 └── ⬅️ Назад
 ```
 
@@ -192,6 +201,9 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
   несколько через пробел/запятую, с валидацией). Новый набор IP полностью
   заменяет старый, сохраняется в `state.json` и **немедленно применяется ко всем
   управляемым доменам** (`Reconciler.change_spoof_ips` пересоздаёт зоны батчами).
+- **Обновить списки** — `Reconciler.reload`: перекачать интернет-списки и заново
+  применить ВСЕ правила (не только новые домены), затем перегенерировать
+  `rules_file`. То же доступно как `ttbot --reload` из CLI.
 
 **Доступ** ограничен whitelist'ом Telegram ID (`@restricted` на каждом хендлере).
 Состояние ожидания текстового ввода хранится в `context.user_data["mode"]`.
@@ -205,9 +217,10 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
 | `config.py` | Загрузка/валидация YAML, парсинг интервала `{x}h{y}m`, разбивка IP на v4/v6 (с дедупликацией) |
 | `domains.py` | Нормализация доменов, разбор `@`-префикса, валидация, IDN→punycode |
 | `state.py` | `StateStore` — хранение состояния, атомарная запись, `UserRule` |
-| `lists.py` | Скачивание и парсинг JSON-списков (`fetch_all`, `extract_domains`) |
-| `technitium.py` | Async-клиент HTTP API Technitium (`set_spoof`, зоны, записи) |
-| `reconciler.py` | **Ядро логики**: приоритеты (`_desired`), синхронизация, `check_domain` |
+| `lists.py` | Скачивание и парсинг JSON-списков (`fetch_all`, `extract_domains`, `normalize_list_url` для github.com) |
+| `technitium.py` | Async-клиент HTTP API Technitium (`set_spoof`, зоны, записи, `parse_zone_spoof`) |
+| `rules.py` | Генерация `rules_file` (эффективные правила для внешнего Technitium App) |
+| `reconciler.py` | **Ядро логики**: приоритеты (`_desired`), синхронизация, `check_domain`, `change_spoof_ips`, `flush`, `reload`, `export_rules` |
 | `bot.py` | Telegram-хендлеры, инлайн-меню, whitelist |
 | `__main__.py` | Точка входа, планировщик (JobQueue), запуск polling |
 
@@ -245,9 +258,9 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
 - Каждый элемент `domain_suffix` трактуется как **wildcard**.
 - Дополнительно (необязательно) читается ключ `domain` — тоже как wildcard.
 - Ошибка одного списка не валит остальные (изолируется в `fetch_all`).
-- **Важно:** ссылки на GitHub должны быть на **raw**-файл
-  (`raw.githubusercontent.com/.../main/file.json`), а не на страницу `/blob/`,
-  иначе вернётся HTML и парсинг JSON упадёт.
+- **GitHub-ссылки.** Можно указывать обычный `github.com/.../blob/...` (или
+  `/raw/...`) — `lists.normalize_list_url` сам преобразует их в
+  `raw.githubusercontent.com` перед скачиванием.
 
 ---
 
@@ -261,7 +274,18 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
   семафором внутри клиента. Доброкачественные гонки «последний победил»
   допустимы и задокументированы.
 - **Конфиг — YAML, списки — JSON.** Конфиг читает человек; формат списков задан
-  спецификацией.
+  спецификацией. `config.yaml` — только настройки; эффективные правила бот
+  выгружает в `rules_file` (`rules.yaml`).
+- **Курс на Technitium App.** Зоны (`set_spoof`) — текущий механизм подмены, но у
+  него есть предел: авторитативная зона не умеет «форвардить apex, проксируя
+  только поддомены» (apex без A → NODATA). Поэтому бот дополнительно ведёт
+  `rules.yaml` — его читает сторонний Technitium App и сам решает: ответить IP
+  подмены или форварднуть наверх (домена нет в правилах). До появления App подмена
+  продолжает работать через зоны.
+- **`--flush` / `--reload`.** `Reconciler.flush` — удалить все зоны и правила,
+  сбросить состояние (пере-сид IP из конфига). `Reconciler.reload` — перекачать
+  списки и заново применить ВСЕ правила. Доступны как `ttbot --flush/--reload`
+  (CLI-one-shot в `__main__`) и из бота (кнопка «Обновить списки»).
 - **Упаковка — `pyproject.toml`** (PEP 621) + **src-layout** (`src/ttbot/`):
   метаданные, зависимости, группа `dev`, console-script `technitium-bot`,
   лицензия MIT. `requirements.txt` оставлен для деплоя и синхронен с
@@ -283,8 +307,10 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
 ## 11. Тесты
 
 `tests/` — pytest-набор офлайн-тестов (без сети и Technitium): парсинг интервала
-и конфига, нормализация доменов и IDN, `@`/wildcard, разбор списков, таблица
-приоритетов `_desired`, `check_domain`, персистентность состояния.
+и конфига, нормализация доменов и IDN, `@`/wildcard, разбор списков и
+`normalize_list_url` (github), таблица приоритетов `_desired`, `check_domain`,
+генерация `rules.yaml` (`build_rules`), `change_spoof_ips`/`flush`/`reload`,
+персистентность состояния.
 
 ```bash
 pip install -e ".[dev]"   # один раз

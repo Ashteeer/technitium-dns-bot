@@ -4,7 +4,35 @@ from __future__ import annotations
 
 import pytest
 
-from ttbot.lists import extract_domains
+from ttbot.lists import extract_domains, normalize_list_url
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        (
+            "https://github.com/u/r/blob/main/list.json",
+            "https://raw.githubusercontent.com/u/r/main/list.json",
+        ),
+        (
+            "https://github.com/u/r/raw/main/list.json",
+            "https://raw.githubusercontent.com/u/r/main/list.json",
+        ),
+        (
+            "https://github.com/u/r/blob/dev/sub/dir/list.json",
+            "https://raw.githubusercontent.com/u/r/dev/sub/dir/list.json",
+        ),
+        # уже raw — без изменений
+        (
+            "https://raw.githubusercontent.com/u/r/main/list.json",
+            "https://raw.githubusercontent.com/u/r/main/list.json",
+        ),
+        # сторонний хост — без изменений
+        ("https://example.com/lists/a.json", "https://example.com/lists/a.json"),
+    ],
+)
+def test_normalize_list_url(url, expected):
+    assert normalize_list_url(url) == expected
 
 
 def test_extract_domains():

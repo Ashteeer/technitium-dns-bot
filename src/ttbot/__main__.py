@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
 
@@ -12,7 +13,7 @@ from telegram.ext import Application, ApplicationBuilder, ContextTypes
 
 from . import __version__
 from .bot import register_handlers
-from .config import ConfigError, load_config
+from .config import Config, ConfigError, load_config
 from .reconciler import Reconciler
 from .state import StateStore
 from .technitium import TechnitiumClient, TechnitiumError
@@ -93,8 +94,41 @@ async def _on_shutdown(application: Application) -> None:
     log.info("Остановлен.")
 
 
-def build_application(config_path: str) -> Application:
-    cfg = load_config(config_path)
+async def _run_oneshot(cfg: Config, action: str) -> None:
+    """Одноразовая операция (--flush / --reload) без запуска Telegram-бота."""
+    session = aiohttp.ClientSession()
+    try:
+        client = TechnitiumClient(
+            cfg.technitium.url,
+            cfg.technitium.token,
+            ttl=cfg.technitium.ttl,
+            zone_type=cfg.technitium.zone_type,
+            verify_ssl=cfg.technitium.verify_ssl,
+            request_timeout=cfg.technitium.request_timeout,
+            max_concurrency=cfg.technitium.max_concurrency,
+            session=session,
+        )
+        state = StateStore(cfg.state_file)
+        state.load()
+        if not state.has_spoof_ips():
+            state.set_spoof_ips(cfg.spoof_ipv4, cfg.spoof_ipv6)
+        reconciler = Reconciler(cfg, client, state)
+        if action == "flush":
+            n = await reconciler.flush()
+            log.info("Flush выполнен: удалено зон=%d, все правила сброшены.", n)
+        else:  # reload
+            res = await reconciler.reload(session)
+            log.info(
+                "Reload выполнен: новых доменов=%d, применено=%d, ошибок=%d.",
+                res.new_domains,
+                res.applied,
+                res.failed,
+            )
+    finally:
+        await session.close()
+
+
+def build_application(cfg: Config) -> Application:
     application = (
         ApplicationBuilder()
         .token(cfg.telegram.bot_token)
@@ -118,6 +152,17 @@ def main(argv=None) -> int:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--flush",
+        action="store_true",
+        help="удалить все правила и зоны, сбросить состояние, и выйти",
+    )
+    group.add_argument(
+        "--reload",
+        action="store_true",
+        help="перекачать списки и заново применить все правила, и выйти",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -129,12 +174,21 @@ def main(argv=None) -> int:
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
     try:
-        application = build_application(args.config)
+        cfg = load_config(args.config)
     except ConfigError as e:
         log.error("Ошибка конфигурации: %s", e)
         return 2
 
+    if args.flush or args.reload:
+        try:
+            asyncio.run(_run_oneshot(cfg, "flush" if args.flush else "reload"))
+        except TechnitiumError as e:
+            log.error("Ошибка Technitium: %s", e)
+            return 1
+        return 0
+
     log.info("Запуск бота…")
+    application = build_application(cfg)
     application.run_polling(allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY])
     return 0
 

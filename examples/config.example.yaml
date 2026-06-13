@@ -1,45 +1,47 @@
 # ============================================================================
 #  Конфигурация Technitium DNS spoofing bot
 #  Скопируйте в config.yaml и заполните своими значениями.
+#
+#  Здесь только НАСТРОЙКИ. Эффективные правила подмены бот генерирует в
+#  отдельный файл (rules_file, по умолчанию rules.yaml) — см. README.
 # ============================================================================
 
-# 1) IP-адреса, на которые подменяем DNS-ответы.
-#    Можно несколько, можно смешивать IPv4 (-> A) и IPv6 (-> AAAA).
-#    ВАЖНО: это лишь НАЧАЛЬНОЕ значение. При первом запуске IP сохраняются в
-#    state.json и далее меняются из бота (Настройки -> Сменить IP подмены).
-#    После смены через бота это поле игнорируется (приоритет у state.json).
+# --- ГЛАВНОЕ ---------------------------------------------------------------
+
+# 1) IP-адреса, на которые подменяем DNS-ответы (IPv4 -> A, IPv6 -> AAAA).
+#    Можно несколько. Это НАЧАЛЬНОЕ значение: при первом запуске сохраняется в
+#    state.json, далее меняется из бота (Настройки -> Сменить IP подмены).
 spoof_ips:
   - "10.0.0.53"
-  - "fd00::53"
+  # - "fd00::53"
 
-# 2) Интервал обновления интернет-списков.
-#    Форматы: "{x}h", "{x}m" или "{x}h{y}m".  Примеры: "6h", "30m", "1h30m".
-update_interval: "6h"
-
-# 3) + 5) Technitium DNS Server API.
-technitium:
-  url: "http://127.0.0.1:5380"   # IP:PORT панели/API Technitium
-  token: "ВСТАВЬТЕ_API_ТОКЕН"    # API Token: панель -> Administration -> Sessions -> Create Token
-  ttl: 300                       # TTL создаваемых записей, сек
-  zone_type: "Primary"           # тип создаваемых зон
-  verify_ssl: true               # проверять TLS-сертификат (для https URL)
-  request_timeout: 30            # таймаут одного запроса, сек
-  max_concurrency: 8             # макс. одновременных запросов к API
-
-# 4) Telegram-бот (включая whitelist разрешённых пользователей).
-telegram:
-  bot_token: "ВСТАВЬТЕ_ТОКЕН_БОТА"   # токен от @BotFather
-  whitelist:                          # ТОЛЬКО эти Telegram ID могут управлять ботом
-    - 123456789
-    # - 987654321
-
-# 6) Списки для подмены (скачиваются по интервалу). Формат — JSON (см. README).
+# 2) Интернет-списки доменов для подмены (скачиваются по интервалу). Формат JSON
+#    (см. README). Ссылки на GitHub можно давать как обычные github.com — бот сам
+#    преобразует blob/raw в raw.githubusercontent.com.
 blocklists:
   - name: "Основной список"
-    url: "https://example.com/lists/main.json"
-  - name: "Реклама"
-    url: "https://example.com/lists/ads.json"
+    url: "https://github.com/USER/REPO/blob/main/list.json"
+  # - name: "Реклама"
+  #   url: "https://raw.githubusercontent.com/USER/REPO/main/ads.json"
 
-# Прочее
-state_file: "state.json"   # файл состояния (пользовательские правила + домены из списков)
-list_fetch_timeout: 60     # таймаут скачивания одного списка, сек
+# 3) Как часто обновлять списки: "{x}h", "{x}m" или "{x}h{y}m" (напр. "6h").
+update_interval: "6h"
+
+# --- ИНФРАСТРУКТУРА --------------------------------------------------------
+
+# 4) Technitium DNS Server API.
+technitium:
+  url: "http://127.0.0.1:5380"   # IP:PORT панели/API Technitium
+  token: "ВСТАВЬТЕ_API_ТОКЕН"    # панель -> Administration -> Sessions -> Create Token
+  # Доп. параметры (необязательно): ttl, zone_type, verify_ssl,
+  # request_timeout, max_concurrency — значения по умолчанию обычно подходят.
+
+# 5) Telegram-бот и whitelist разрешённых пользователей.
+telegram:
+  bot_token: "ВСТАВЬТЕ_ТОКЕН_БОТА"   # токен от @BotFather
+  whitelist:                          # ТОЛЬКО эти Telegram ID управляют ботом
+    - 123456789
+
+# --- ФАЙЛЫ (необязательно) -------------------------------------------------
+state_file: "state.json"   # внутреннее состояние бота
+rules_file: "rules.yaml"   # генерируемые эффективные правила (для Technitium App)

@@ -28,6 +28,7 @@ import aiohttp
 
 from .config import Config
 from .lists import ListStat, fetch_all
+from .rules import build_rules, write_rules
 from .state import StateStore, UserRule
 from .technitium import TechnitiumClient, TechnitiumError, parse_zone_spoof
 
@@ -107,6 +108,29 @@ class Reconciler:
             log.warning("Не удалось применить домен %s: %s", domain, e)
             return False
 
+    async def _safe_delete(self, domain: str) -> bool:
+        try:
+            await self.client.delete_zone(domain)
+            return True
+        except TechnitiumError as e:
+            log.warning("Не удалось удалить зону %s: %s", domain, e)
+            return False
+
+    def export_rules(self) -> None:
+        """Перезаписать файл правил (``rules_file``) для внешнего Technitium App.
+
+        Содержит эффективные правила (списки + пользовательские) в виде
+        ``{domain, apex, subdomains}`` + текущие IP подмены. Вызывается после
+        каждого изменения состояния.
+        """
+        data = build_rules(
+            self.managed_domains(),
+            self._desired,
+            self.state.spoof_ipv4,
+            self.state.spoof_ipv6,
+        )
+        write_rules(self.cfg.rules_file, data)
+
     # ---------------------------------------------------- периодический sync
     async def sync_lists(self, session: aiohttp.ClientSession) -> SyncResult:
         """Скачать списки и применить ТОЛЬКО новые домены.
@@ -132,6 +156,7 @@ class Reconciler:
             applied,
             failed,
         )
+        self.export_rules()
         return SyncResult(len(new), applied, failed, stats)
 
     # ---------------------------------------------------- действия из бота
@@ -139,11 +164,13 @@ class Reconciler:
         """Пользователь добавляет домен (он будет подменяться)."""
         self.state.set_rule(domain, "add", scope)
         await self.apply_domain(domain)
+        self.export_rules()
 
     async def user_block(self, domain: str, scope: str) -> None:
         """Пользователь удаляет домен (он больше не будет подменяться)."""
         self.state.set_rule(domain, "block", scope)
         await self.apply_domain(domain)
+        self.export_rules()
 
     async def remove_rule(self, index_1based: int) -> UserRule | None:
         """Убрать пользовательское правило по номеру.
@@ -156,6 +183,7 @@ class Reconciler:
         if rule is None:
             return None
         await self.apply_domain(rule.domain)
+        self.export_rules()
         return rule
 
     # ---------------------------------------------------- смена IP подмены
@@ -188,7 +216,54 @@ class Reconciler:
             failed,
             len(domains),
         )
+        self.export_rules()
         return applied, failed
+
+    # ------------------------------------------------- сброс и перезагрузка
+    async def flush(self) -> int:
+        """Сбросить всё в исходное состояние: удалить все правила и зоны.
+
+        Удаляет управляемые зоны из Technitium, очищает пользовательские правила
+        и домены из списков, пере-сидирует IP подмены из конфига. Возвращает
+        число доменов, для которых удалялись зоны.
+        """
+        domains = self.managed_domains()
+        for batch in _chunks(domains, 100):
+            await asyncio.gather(*(self._safe_delete(d) for d in batch))
+        self.state.user_rules = {}
+        self.state.list_domains = set()
+        self.state.set_spoof_ips(self.cfg.spoof_ipv4, self.cfg.spoof_ipv6)  # сохраняет
+        self.export_rules()
+        log.info("Flush: удалены все правила и %d зон.", len(domains))
+        return len(domains)
+
+    async def reload(self, session: aiohttp.ClientSession) -> SyncResult:
+        """Перекачать списки и заново применить ВСЕ правила (с учётом пользовательских).
+
+        В отличие от ``sync_lists`` (только новые домены) — применяет повторно
+        все управляемые домены, чтобы подхватить изменения списков/правил.
+        """
+        incoming, stats = await fetch_all(session, self.cfg.blocklists, self.cfg.list_fetch_timeout)
+        new = incoming - self.state.list_domains
+        if new:
+            self.state.add_list_domains(set(new))
+
+        domains = self.managed_domains()
+        applied = failed = 0
+        for batch in _chunks(domains, 100):
+            results = await asyncio.gather(*(self._safe_apply(d) for d in batch))
+            applied += sum(1 for r in results if r)
+            failed += sum(1 for r in results if not r)
+
+        self.export_rules()
+        log.info(
+            "Reload: новых доменов=%d, применено=%d, ошибок=%d (всего=%d).",
+            len(new),
+            applied,
+            failed,
+            len(domains),
+        )
+        return SyncResult(len(new), applied, failed, stats)
 
     # ---------------------------------------------------- проверка домена
     async def check_domain(self, query: str) -> CheckReport:

@@ -67,6 +67,7 @@ class Config:
     telegram: TelegramCfg
     blocklists: list[BlockList]
     state_file: Path
+    rules_file: Path
     list_fetch_timeout: int = 60
 
 
@@ -166,6 +167,7 @@ def load_config(path: str | Path) -> Config:
         blocklists.append(BlockList(name=str(item.get("name", item["url"])), url=str(item["url"])))
 
     state_file = Path(data.get("state_file", "state.json"))
+    rules_file = Path(data.get("rules_file", "rules.yaml"))
 
     return Config(
         spoof_ipv4=v4,
@@ -176,5 +178,6 @@ def load_config(path: str | Path) -> Config:
         telegram=telegram,
         blocklists=blocklists,
         state_file=state_file,
+        rules_file=rules_file,
         list_fetch_timeout=int(data.get("list_fetch_timeout", 60)),
     )

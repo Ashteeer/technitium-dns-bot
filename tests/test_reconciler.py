@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from ttbot.domains import EXACT, WILDCARD
 from ttbot.reconciler import Reconciler
@@ -136,13 +137,27 @@ def test_check_nothing_found():
 
 # -------------------------------------------------------- смена IP подмены
 class _FakeClient:
-    """Минимальный клиент: записывает вызовы set_spoof вместо HTTP."""
+    """Минимальный клиент: записывает вызовы set_spoof / delete_zone вместо HTTP."""
 
     def __init__(self):
-        self.calls = []
+        self.calls = []  # set_spoof
+        self.deleted = []  # delete_zone
 
     async def set_spoof(self, base, apex, wildcard, ipv4, ipv6):
         self.calls.append((base, apex, wildcard, tuple(ipv4), tuple(ipv6)))
+
+    async def delete_zone(self, zone):
+        self.deleted.append(zone)
+
+
+def _cfg(tmp_path):
+    return SimpleNamespace(
+        rules_file=tmp_path / "rules.yaml",
+        spoof_ipv4=["9.9.9.9"],
+        spoof_ipv6=[],
+        blocklists=[],
+        list_fetch_timeout=60,
+    )
 
 
 def test_managed_domains_union_dedup(rec):
@@ -152,9 +167,9 @@ def test_managed_domains_union_dedup(rec):
     assert rec.managed_domains() == ["a.com", "b.com", "c.com"]
 
 
-def test_change_spoof_ips_reapplies_all_zones(state):
+def test_change_spoof_ips_reapplies_all_zones(tmp_path, state):
     client = _FakeClient()
-    rec = Reconciler(cfg=None, client=client, state=state)
+    rec = Reconciler(cfg=_cfg(tmp_path), client=client, state=state)
     state.list_domains = {"a.com"}
     state.set_rule("b.com", "add", WILDCARD)
     state.set_spoof_ips(["10.0.0.1"], [])
@@ -169,3 +184,35 @@ def test_change_spoof_ips_reapplies_all_zones(state):
     for _base, _apex, _wildcard, v4, v6 in client.calls:
         assert v4 == ("10.0.0.2",)
         assert v6 == ("fd00::2",)
+
+
+def test_flush_deletes_zones_and_resets(tmp_path, state):
+    client = _FakeClient()
+    rec = Reconciler(cfg=_cfg(tmp_path), client=client, state=state)
+    state.list_domains = {"a.com", "b.com"}
+    state.set_rule("c.com", "add", WILDCARD)
+    state.set_spoof_ips(["1.1.1.1"], [])
+
+    n = asyncio.run(rec.flush())
+
+    assert n == 3
+    assert set(client.deleted) == {"a.com", "b.com", "c.com"}
+    assert state.list_rules() == []
+    assert state.list_domains == set()
+    assert state.spoof_ipv4 == ["9.9.9.9"]  # пере-сидировано из конфига
+    assert (tmp_path / "rules.yaml").exists()
+
+
+def test_reload_reapplies_all_and_writes_rules(tmp_path, state):
+    client = _FakeClient()
+    rec = Reconciler(cfg=_cfg(tmp_path), client=client, state=state)
+    state.list_domains = {"a.com"}
+    state.set_rule("b.com", "add", WILDCARD)
+    state.set_spoof_ips(["1.1.1.1"], [])
+
+    res = asyncio.run(rec.reload(session=None))  # blocklists=[] → сеть не нужна
+
+    assert res.new_domains == 0
+    assert res.applied == 2
+    assert {c[0] for c in client.calls} == {"a.com", "b.com"}
+    assert (tmp_path / "rules.yaml").exists()

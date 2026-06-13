@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -27,6 +28,24 @@ from .config import BlockList
 from .domains import normalize_domain
 
 log = logging.getLogger(__name__)
+
+# github.com/<user>/<repo>/blob|raw/<branch>/<path>  ->  raw.githubusercontent.com/...
+_GH_FILE_RE = re.compile(r"^https?://github\.com/([^/]+)/([^/]+)/(?:blob|raw)/(.+)$", re.IGNORECASE)
+
+
+def normalize_list_url(url: str) -> str:
+    """Привести обычную github.com-ссылку на файл к raw-виду.
+
+    ``github.com/<u>/<r>/blob/<branch>/<path>`` (и ``/raw/``) →
+    ``raw.githubusercontent.com/<u>/<r>/<branch>/<path>``. Остальные URL — без
+    изменений. Так в config.yaml можно вставлять ссылку прямо из адресной строки.
+    """
+    url = url.strip()
+    m = _GH_FILE_RE.match(url)
+    if m:
+        user, repo, rest = m.group(1), m.group(2), m.group(3)
+        return f"https://raw.githubusercontent.com/{user}/{repo}/{rest}"
+    return url
 
 
 @dataclass
@@ -62,6 +81,7 @@ def extract_domains(data: object) -> set[str]:
 
 
 async def fetch_one(session: aiohttp.ClientSession, url: str, timeout: int) -> set[str]:
+    url = normalize_list_url(url)
     async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
         resp.raise_for_status()
         text = await resp.text()

@@ -83,6 +83,9 @@ wget -qO- https://raw.githubusercontent.com/Ashteeer/technitium-dns-bot/main/INS
 Читается `domain_suffix` (массив строк). Дополнительно поддерживается ключ `domain`.
 Пример — [examples/sample-list.json](examples/sample-list.json).
 
+URL списка можно указывать как обычную ссылку **github.com** (`/blob/` или
+`/raw/`) — бот сам преобразует её в `raw.githubusercontent.com`.
+
 ## Установка (Ubuntu)
 
 ### Быстрая установка (рекомендуется)
@@ -121,6 +124,8 @@ ttbot status
 ttbot --version          # установленная версия
 ttbot --update           # обновить до последней версии с GitHub
 ttbot --update 1.0.0     # обновить/откатить на конкретную версию (тег 1.0.0)
+ttbot --reload           # перекачать списки и заново применить все правила
+ttbot --flush [-y]       # удалить ВСЕ правила и зоны, сбросить состояние
 ttbot restart            # перезапуск
 ttbot status             # статус
 ttbot logs               # логи (follow)
@@ -183,17 +188,44 @@ python -m ttbot --config config.yaml --log-level INFO
     несколько через пробел/запятую, с проверкой корректности). Новый IP заменяет
     старый и сразу применяется ко **всем** уже подменяемым доменам — зоны
     пересоздаются на новый адрес.
+  - **🔄 Обновить списки** — перекачать интернет-списки и заново применить все
+    правила (то же, что `ttbot --reload`).
 
-## Состояние
+## Состояние и файл правил
 
-Файл `state_file` (по умолчанию `state.json`) хранит пользовательские правила,
-«липкое» множество доменов из списков и текущие IP подмени (`spoof_ipv4`/
-`spoof_ipv6`). Запись атомарна (через временный файл).
+- `state_file` (по умолчанию `state.json`) — **внутреннее** состояние бота:
+  пользовательские правила, «липкое» множество доменов из списков и текущие IP
+  подмены (`spoof_ipv4`/`spoof_ipv6`). Запись атомарна.
+- `rules_file` (по умолчанию `rules.yaml`) — **автогенерируемый** человекочитаемый
+  файл эффективных правил для стороннего Technitium App (см. ниже). Бот
+  перезаписывает его при каждом изменении; вручную редактировать не нужно.
 
 > **Источник истины для IP подмены.** При первом запуске IP берутся из
 > `config.yaml` (`spoof_ips`) и сохраняются в `state.json`. После смены IP через
 > бота приоритет у `state.json`. Чтобы снова взять IP из конфига, удалите ключи
 > `spoof_ipv4`/`spoof_ipv6` из `state.json`.
+
+## Файл правил для Technitium App (`rules.yaml`)
+
+Бот генерирует эффективный набор правил (списки + пользовательские правила,
+объединённые) — чтобы внешний Technitium App решал на каждый запрос: ответить
+IP подмены или **форварднуть** на вышестоящий DNS (если домена в правилах нет).
+
+```yaml
+spoof_ipv4: [95.85.252.176]
+spoof_ipv6: []
+rules:
+  - {domain: doubleclick.net, apex: true,  subdomains: true}   # домен и поддомены
+  - {domain: ads.example.com, apex: true,  subdomains: false}  # только домен
+  - {domain: twitch.tv,       apex: false, subdomains: true}   # apex -> форвард, *.twitch.tv -> подмена
+```
+
+- `apex: true` — подменять сам домен; `subdomains: true` — подменять `*.домен`.
+- Домена нет в `rules` → подмены нет, App форвардит запрос наверх.
+- Это снимает ограничение авторитативных зон: `twitch.tv` можно отдавать на
+  настоящий сервер, проксируя только его поддомены.
+
+Образец формата — [examples/rules.example.yaml](examples/rules.example.yaml).
 
 ## Важные замечания
 
@@ -243,16 +275,18 @@ technitium-dns-bot/
 │   ├── lists.py            # скачивание и парсинг JSON-списков
 │   ├── state.py            # персистентное состояние (правила, списки, IP подмены)
 │   ├── technitium.py       # асинхронный клиент Technitium API
-│   ├── reconciler.py       # логика приоритетов, синхронизация, смена IP
+│   ├── rules.py            # генерация rules.yaml (эффективные правила для App)
+│   ├── reconciler.py       # логика приоритетов, синхронизация, смена IP, flush/reload
 │   └── bot.py              # Telegram-UI на кнопках
 ├── tests/                  # pytest-набор (офлайн)
 ├── scripts/
-│   ├── ttbot               # системная команда управления (--version/--update/…)
+│   ├── ttbot               # системная команда (--version/--update/--reload/--flush/…)
 │   └── config_tool.py      # init/show config для INSTALL.sh
 ├── deploy/
 │   └── technitium-bot.service   # unit для systemd
 ├── examples/
 │   ├── config.example.yaml # пример конфигурации
+│   ├── rules.example.yaml  # формат файла правил для Technitium App
 │   └── sample-list.json    # пример списка
 ├── docs/
 │   ├── DEPLOY.md           # развёртывание и эксплуатация

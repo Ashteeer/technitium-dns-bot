@@ -73,6 +73,7 @@ def settings_menu_markup() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📋 Просмотреть правила", callback_data="view")],
             [InlineKeyboardButton("🗑 Убрать правило", callback_data="remove")],
             [InlineKeyboardButton("🌐 Сменить IP подмены", callback_data="changeip")],
+            [InlineKeyboardButton("🔄 Обновить списки", callback_data="reload")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="menu")],
         ]
     )
@@ -225,6 +226,29 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "подменяемым доменам (пересоздание зон может занять время).",
             reply_markup=cancel_markup(),
             parse_mode="Markdown",
+        )
+
+    elif data == "reload":
+        reconciler = _reconciler(context)
+        session = context.application.bot_data["session"]
+        await query.edit_message_text("🔄 Обновляю списки и применяю правила…")
+        try:
+            res = await reconciler.reload(session)
+        except TechnitiumError as e:
+            await query.edit_message_text(
+                f"❌ Ошибка Technitium: {e}",
+                reply_markup=settings_menu_markup(),
+                parse_mode="Markdown",
+            )
+            return
+        text = f"✅ Готово. Новых доменов: *{res.new_domains}*, применено: *{res.applied}*"
+        if res.failed:
+            text += f", ошибок: *{res.failed}*"
+        errs = [s for s in res.list_stats if s.error]
+        if errs:
+            text += "\n\n_Списки с ошибками:_\n" + "\n".join(f"• {s.name}: {s.error}" for s in errs)
+        await query.edit_message_text(
+            text, reply_markup=settings_menu_markup(), parse_mode="Markdown"
         )
 
 
