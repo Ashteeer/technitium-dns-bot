@@ -44,9 +44,11 @@ class SyncResult:
 
 @dataclass
 class ProxyHit:
-    """Проксируемый домен/поддомен, найденный в зонах Technitium."""
+    """Проксируемая зона, найденная в Technitium (ниже по дереву от запроса)."""
 
-    pattern: str  # "*.x" (wildcard), "@x" (только домен) или "x"
+    domain: str  # имя зоны, напр. "robinfrontend-pa.googleapis.com"
+    apex: bool  # подменяется сам домен
+    wildcard: bool  # подменяются его поддомены (*.domain)
     ips: list[str]
 
 
@@ -235,14 +237,13 @@ class Reconciler:
 
         # 2. Поддомены query.
         subdomains: list[ProxyHit] = []
-        # Собственный wildcard query, когда сам домен (apex) не подменяется.
+        # Собственный wildcard query, когда сам домен (apex) не подменяется:
+        # сам query не проксируется, но его поддомены (*.query) — да.
         if q_wild and not q_apex:
-            subdomains.append(ProxyHit(f"*.{query}", q_ips))
+            subdomains.append(ProxyHit(query, apex=False, wildcard=True, ips=q_ips))
         for z in sub_zone_names:
             z_apex, z_wild, z_ips = spoof[z]
-            if z_wild:
-                subdomains.append(ProxyHit(f"*.{z}", z_ips))
-            elif z_apex:
-                subdomains.append(ProxyHit(f"@{z}", z_ips))
+            if z_apex or z_wild:
+                subdomains.append(ProxyHit(z, apex=z_apex, wildcard=z_wild, ips=z_ips))
 
         return CheckReport(query, proxied, reason, ips, subdomains)

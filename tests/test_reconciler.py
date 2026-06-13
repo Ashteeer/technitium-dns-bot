@@ -74,7 +74,25 @@ def test_check_parent_shows_proxied_subdomain():
     zones = {"test.google.com": [_a("test.google.com"), _a("*.test.google.com")]}
     rep = _check(zones, "google.com")
     assert rep.proxied is False
-    assert [(h.pattern, h.ips) for h in rep.subdomains] == [("*.test.google.com", ["10.0.0.53"])]
+    assert len(rep.subdomains) == 1
+    hit = rep.subdomains[0]
+    assert hit.domain == "test.google.com"
+    assert (hit.apex, hit.wildcard) == (True, True)
+    assert hit.ips == ["10.0.0.53"]
+
+
+def test_check_hyphenated_subdomain_zone():
+    # Реальный кейс: проксируется robinfrontend-pa.googleapis.com,
+    # проверка googleapis.com должна показать его в поддоменах.
+    zone = "robinfrontend-pa.googleapis.com"
+    zones = {zone: [_a(zone), _a(f"*.{zone}")]}
+    rep = _check(zones, "googleapis.com")
+    assert rep.proxied is False
+    assert [h.domain for h in rep.subdomains] == [zone]
+    assert (rep.subdomains[0].apex, rep.subdomains[0].wildcard) == (True, True)
+    # сам зонный домен проксируется и покрыт wildcard'ом для своих поддоменов
+    assert _check(zones, zone).proxied is True
+    assert _check(zones, f"x.{zone}").proxied is True
 
 
 def test_check_query_apex_and_wildcard():
@@ -106,7 +124,7 @@ def test_check_wildcard_only_zone():
     zones = {"y.com": [_a("*.y.com")]}  # только wildcard, без apex
     rep_apex = _check(zones, "y.com")
     assert rep_apex.proxied is False  # сам y.com не покрыт *.y.com
-    assert any(h.pattern == "*.y.com" for h in rep_apex.subdomains)
+    assert any(h.domain == "y.com" and h.wildcard and not h.apex for h in rep_apex.subdomains)
     assert _check(zones, "a.y.com").proxied is True
 
 

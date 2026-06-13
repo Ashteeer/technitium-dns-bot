@@ -108,6 +108,14 @@ def _current_ips(reconciler: Reconciler) -> str:
     return ", ".join(ips) if ips else "не заданы"
 
 
+def _scope_note(apex: bool, wildcard: bool) -> str:
+    if apex and wildcard:
+        return "домен и поддомены"
+    if apex:
+        return "только домен"
+    return "только поддомены"
+
+
 def _format_check(report: CheckReport) -> str:
     lines = [f"🔍 Проверка: `{report.query}`", ""]
     if report.proxied:
@@ -120,8 +128,10 @@ def _format_check(report: CheckReport) -> str:
         lines.append("")
         lines.append("*Проксируемые поддомены:*")
         for hit in report.subdomains:
+            name = hit.domain if hit.apex else f"*.{hit.domain}"
             ip = ", ".join(hit.ips) or "—"
-            lines.append(f"• `{hit.pattern}` — проксируется на `{ip}`")
+            note = _scope_note(hit.apex, hit.wildcard)
+            lines.append(f"• `{name}` — проксируется на `{ip}` _({note})_")
     return "\n".join(lines)
 
 

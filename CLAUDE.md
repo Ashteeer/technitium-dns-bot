@@ -118,20 +118,23 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
 3. **Сам `query`** проксируется, если у его зоны есть apex-запись, ИЛИ родитель
    покрывает его wildcard'ом (`*.parent`). `reason`: «только домен» / «домен и
    поддомены» / «покрыт wildcard `*.parent`».
-4. **Поддомены `query`** — перечисляются проксируемые зоны ниже по дереву:
-   `*.z` (есть wildcard) или `@z` (только apex), с их IP. Сюда же попадает
-   собственный `*.query`, если сам домен (apex) не подменяется.
+4. **Поддомены `query`** — перечисляются проксируемые зоны ниже по дереву как
+   `ProxyHit(domain, apex, wildcard, ips)`. В выводе бот показывает реальное имя
+   зоны и охват: `domain (домен и поддомены | только домен)` либо `*.domain
+   (только поддомены)`, если у зоны нет apex-записи. Собственный `*.query`
+   добавляется, если сам домен (apex) не подменяется.
 
-Это решает кейс «`test.google.com` проксируется, а `google.com` — нет»: проверка
-`google.com` покажет `❌ google.com` и в поддоменах `*.test.google.com → IP`.
+Это решает кейс «`robinfrontend-pa.googleapis.com` проксируется, а
+`googleapis.com` — нет»: проверка `googleapis.com` покажет `❌ googleapis.com` и в
+поддоменах `robinfrontend-pa.googleapis.com → IP (домен и поддомены)`.
 
 Примеры вывода в боте:
 
 | Запрос | Фактические зоны | Вывод |
 |---|---|---|
-| `google.com` | зона `test.google.com` (wildcard) | ❌ `google.com`; поддомен `*.test.google.com → IP` |
-| `test.google.com` | зона `test.google.com` (wildcard) | ✅ проксируется (домен и поддомены) |
-| `mail.test.google.com` | зона `test.google.com` (wildcard) | ✅ (покрыт `*.test.google.com`) |
+| `googleapis.com` | зона `robinfrontend-pa.googleapis.com` (wildcard) | ❌ `googleapis.com`; поддомен `robinfrontend-pa.googleapis.com → IP (домен и поддомены)` |
+| `robinfrontend-pa.googleapis.com` | та же зона | ✅ проксируется (домен и поддомены) |
+| `x.robinfrontend-pa.googleapis.com` | та же зона | ✅ (покрыт `*.robinfrontend-pa.googleapis.com`) |
 | `sub.exact-only.com` | зона `exact-only.com` (только apex) | ❌ (exact не покрывает поддомены) |
 
 ---
