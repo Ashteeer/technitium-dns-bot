@@ -29,7 +29,7 @@ import aiohttp
 from .config import Config
 from .lists import ListStat, fetch_all
 from .state import StateStore, UserRule
-from .technitium import TechnitiumClient, TechnitiumError
+from .technitium import TechnitiumClient, TechnitiumError, parse_zone_spoof
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +40,25 @@ class SyncResult:
     applied: int
     failed: int
     list_stats: list[ListStat]
+
+
+@dataclass
+class ProxyHit:
+    """Проксируемый домен/поддомен, найденный в зонах Technitium."""
+
+    pattern: str  # "*.x" (wildcard), "@x" (только домен) или "x"
+    ips: list[str]
+
+
+@dataclass
+class CheckReport:
+    """Результат проверки домена по фактическим зонам Technitium."""
+
+    query: str
+    proxied: bool  # подменяется ли сам query
+    reason: str  # как именно (для proxied)
+    ips: list[str]  # IP, на которые подменяется query
+    subdomains: list[ProxyHit]  # проксируемые поддомены query (вниз по дереву)
 
 
 def _chunks(items: list[str], size: int) -> Iterable[list[str]]:
@@ -170,52 +189,60 @@ class Reconciler:
         return applied, failed
 
     # ---------------------------------------------------- проверка домена
-    def check_domain(self, query: str) -> tuple[bool, str]:
-        """Проверить, будет ли домен (или поддомен) подменяться.
+    async def check_domain(self, query: str) -> CheckReport:
+        """Проверить домен по **фактическим зонам Technitium** (через API).
 
-        Возвращает ``(is_proxied, reason)`` — флаг и человекочитаемая причина.
-
-        Алгоритм:
-        1. Проверяем сам ``query`` через ``_desired``.
-        2. Если не найдено — поднимаемся по цепочке родителей и ищем
-           wildcard-покрытие (например, ``*.google.com`` покрывает
-           ``test.google.com``). Останавливаемся перед TLD.
+        Возвращает :class:`CheckReport`:
+        1. Подменяется ли сам ``query`` — если есть apex-запись в его зоне ИЛИ
+           один из родителей покрывает его wildcard'ом (``*.parent``).
+        2. Какие **поддомены** ``query`` проксируются — перечисляются зоны ниже
+           по дереву (например, при проверке ``google.com`` найдётся
+           ``*.test.google.com``), с IP из их записей.
         """
+        zones = await self.client.list_zones()
         parts = query.split(".")
+        # Предки query без TLD: для test.google.com → google.com (не com).
+        ancestors = [".".join(parts[i:]) for i in range(1, len(parts) - 1)]
+        # Зоны строго ниже query (его поддомены).
+        sub_zone_names = sorted(z for z in zones if z.endswith("." + query))
 
-        # 1. Точный домен (apex-запись)
-        apex, _ = self._desired(query)
-        if apex:
-            rule = self.state.get_rule(query)
-            if rule and rule.action == "add":
-                if rule.scope == "wildcard":
-                    reason = f"пользовательское правило (wildcard) для `{query}`"
-                else:
-                    reason = f"пользовательское правило (точное) для `{query}`"
-            else:
-                reason = f"домен `{query}` есть в списках"
-            return True, reason
+        to_inspect: list[str] = []
+        if query in zones:
+            to_inspect.append(query)
+        to_inspect.extend(a for a in ancestors if a in zones)
+        to_inspect.extend(sub_zone_names)
 
-        # Явная блокировка самого домена
-        rule = self.state.get_rule(query)
-        if rule and rule.action == "block":
-            return False, f"заблокирован пользовательским правилом для `{query}`"
+        records = await asyncio.gather(*(self.client.get_records(z) for z in to_inspect))
+        spoof = {z: parse_zone_spoof(rec, z) for z, rec in zip(to_inspect, records, strict=True)}
 
-        # 2. Поднимаемся по цепочке родителей, ищем wildcard-покрытие.
-        # range(1, N-1): для test.google.com → проверим google.com, но не com (TLD).
-        for i in range(1, len(parts) - 1):
-            parent = ".".join(parts[i:])
-            _, wildcard = self._desired(parent)
-            if wildcard:
-                prule = self.state.get_rule(parent)
-                if prule and prule.action == "add":
-                    reason = f"пользовательское wildcard-правило `*.{parent}`"
-                else:
-                    reason = f"домен `{parent}` есть в списках (wildcard `*.{parent}`)"
-                return True, reason
-            # Явная wildcard-блокировка на родителе
-            prule = self.state.get_rule(parent)
-            if prule and prule.action == "block" and prule.scope == "wildcard":
-                return False, f"заблокирован wildcard-правилом `*.{parent}`"
+        # 1. Сам query.
+        proxied = False
+        reason = ""
+        ips: list[str] = []
+        q_apex, q_wild, q_ips = spoof.get(query, (False, False, []))
+        if q_apex:
+            proxied = True
+            ips = q_ips
+            reason = "домен и поддомены" if q_wild else "только домен"
+        else:
+            for parent in ancestors:
+                _, p_wild, p_ips = spoof.get(parent, (False, False, []))
+                if p_wild:
+                    proxied = True
+                    ips = p_ips
+                    reason = f"покрыт wildcard `*.{parent}`"
+                    break
 
-        return False, "нет активных правил для этого домена"
+        # 2. Поддомены query.
+        subdomains: list[ProxyHit] = []
+        # Собственный wildcard query, когда сам домен (apex) не подменяется.
+        if q_wild and not q_apex:
+            subdomains.append(ProxyHit(f"*.{query}", q_ips))
+        for z in sub_zone_names:
+            z_apex, z_wild, z_ips = spoof[z]
+            if z_wild:
+                subdomains.append(ProxyHit(f"*.{z}", z_ips))
+            elif z_apex:
+                subdomains.append(ProxyHit(f"@{z}", z_ips))
+
+        return CheckReport(query, proxied, reason, ips, subdomains)

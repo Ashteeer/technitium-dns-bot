@@ -17,7 +17,7 @@ from telegram.ext import (
 
 from .config import ConfigError, parse_spoof_ips
 from .domains import EXACT, describe_scope, normalize_domain, parse_user_input
-from .reconciler import Reconciler
+from .reconciler import CheckReport, Reconciler
 from .technitium import TechnitiumError
 
 log = logging.getLogger(__name__)
@@ -106,6 +106,23 @@ def _rules_text(reconciler: Reconciler) -> str:
 def _current_ips(reconciler: Reconciler) -> str:
     ips = reconciler.state.spoof_ipv4 + reconciler.state.spoof_ipv6
     return ", ".join(ips) if ips else "не заданы"
+
+
+def _format_check(report: CheckReport) -> str:
+    lines = [f"🔍 Проверка: `{report.query}`", ""]
+    if report.proxied:
+        ip = ", ".join(report.ips) or "—"
+        extra = f"  _({report.reason})_" if report.reason else ""
+        lines.append(f"✅ `{report.query}` — проксируется на `{ip}`{extra}")
+    else:
+        lines.append(f"❌ `{report.query}` — не проксируется")
+    if report.subdomains:
+        lines.append("")
+        lines.append("*Проксируемые поддомены:*")
+        for hit in report.subdomains:
+            ip = ", ".join(hit.ips) or "—"
+            lines.append(f"• `{hit.pattern}` — проксируется на `{ip}`")
+    return "\n".join(lines)
 
 
 # ----------------------------------------------------------------- команды
@@ -273,13 +290,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         context.user_data.pop("mode", None)
-        is_proxied, reason = reconciler.check_domain(checked)
-        if is_proxied:
-            answer = f"✅ `{checked}` — домен *проксируется*"
-        else:
-            answer = f"❌ `{checked}` — домен *не проксируется*"
+        try:
+            report = await reconciler.check_domain(checked)
+        except TechnitiumError as e:
+            await update.message.reply_text(
+                f"❌ Ошибка Technitium: {e}", reply_markup=main_menu_markup()
+            )
+            return
         await update.message.reply_text(
-            f"{answer}\n_{reason}_",
+            _format_check(report),
             reply_markup=main_menu_markup(),
             parse_mode="Markdown",
         )

@@ -113,6 +113,14 @@ class TechnitiumClient:
             {"domain": name, "zone": zone, "type": rtype, "ttl": self.ttl, "ipAddress": ip},
         )
 
+    async def get_records(self, zone: str) -> list[dict]:
+        """Вернуть все записи зоны (для проверки фактического состояния подмены)."""
+        data = await self._call(
+            "zones/records/get", {"domain": zone, "zone": zone, "listZone": "true"}
+        )
+        records = data.get("response", {}).get("records", [])
+        return records if isinstance(records, list) else []
+
     # ----------------------------------------------------------- high level
     async def set_spoof(
         self,
@@ -148,3 +156,36 @@ class TechnitiumClient:
                 await self.add_record(name, base_domain, "A", ip)
             for ip in ipv6:
                 await self.add_record(name, base_domain, "AAAA", ip)
+
+
+def parse_zone_spoof(records: list[dict], zone: str) -> tuple[bool, bool, list[str]]:
+    """По записям зоны определить фактическое состояние подмены.
+
+    Возвращает ``(has_apex, has_wildcard, ips)``:
+      * ``has_apex``     — есть A/AAAA для самого ``zone`` (подменяется сам домен);
+      * ``has_wildcard`` — есть A/AAAA для ``*.zone`` (подменяются поддомены);
+      * ``ips``          — IP из этих записей (в порядке появления, без дублей).
+    """
+    zone = zone.lower().rstrip(".")
+    wild = f"*.{zone}"
+    has_apex = has_wild = False
+    ips: list[str] = []
+    seen: set[str] = set()
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("type", "")).upper() not in ("A", "AAAA"):
+            continue
+        name = str(r.get("name", "")).lower().rstrip(".")
+        if name == zone:
+            has_apex = True
+        elif name == wild:
+            has_wild = True
+        else:
+            continue
+        rdata = r.get("rData") or {}
+        ip = rdata.get("ipAddress") or rdata.get("value") or ""
+        if ip and ip not in seen:
+            seen.add(ip)
+            ips.append(str(ip))
+    return has_apex, has_wild, ips

@@ -46,43 +46,74 @@ def test_desired_user_block_exact_not_in_list(rec):
     assert rec._desired("blonely.com") == (False, False)
 
 
-# -------------------------------------------------------------- check_domain
-def test_check_apex_in_list(rec):
-    rec.state.list_domains = {"google.com"}
-    proxied, _ = rec.check_domain("google.com")
-    assert proxied is True
+# --------------------------------------------------- check_domain (через API)
+def _a(name: str, ip: str = "10.0.0.53") -> dict:
+    return {"name": name, "type": "A", "rData": {"ipAddress": ip}}
 
 
-def test_check_subdomain_covered_by_list_wildcard(rec):
-    rec.state.list_domains = {"google.com"}
-    proxied, _ = rec.check_domain("test.google.com")
-    assert proxied is True
+class _FakeZonesClient:
+    """Клиент, отдающий заранее заданные зоны и их записи (без сети)."""
+
+    def __init__(self, zones: dict[str, list[dict]]):
+        self._zones = zones
+
+    async def list_zones(self):
+        return set(self._zones)
+
+    async def get_records(self, zone: str):
+        return self._zones.get(zone, [])
 
 
-def test_check_apex_blocked_exact_but_subdomain_stays(rec):
-    rec.state.list_domains = {"google.com"}
-    rec.state.set_rule("google.com", "block", EXACT)
-    assert rec.check_domain("google.com")[0] is False  # apex заблокирован
-    assert rec.check_domain("mail.google.com")[0] is True  # wildcard из списка
+def _check(zones: dict, query: str):
+    rec = Reconciler(cfg=None, client=_FakeZonesClient(zones), state=None)
+    return asyncio.run(rec.check_domain(query))
 
 
-def test_check_exact_add_does_not_cover_subdomains(rec):
-    rec.state.set_rule("exact-only.com", "add", EXACT)
-    assert rec.check_domain("exact-only.com")[0] is True
-    assert rec.check_domain("sub.exact-only.com")[0] is False
+def test_check_parent_shows_proxied_subdomain():
+    # google.com не проксируется, но test.google.com — да (wildcard).
+    zones = {"test.google.com": [_a("test.google.com"), _a("*.test.google.com")]}
+    rep = _check(zones, "google.com")
+    assert rep.proxied is False
+    assert [(h.pattern, h.ips) for h in rep.subdomains] == [("*.test.google.com", ["10.0.0.53"])]
 
 
-def test_check_block_wildcard_blocks_everything(rec):
-    rec.state.list_domains = {"google.com"}
-    rec.state.set_rule("google.com", "block", WILDCARD)
-    assert rec.check_domain("google.com")[0] is False
-    assert rec.check_domain("x.google.com")[0] is False
+def test_check_query_apex_and_wildcard():
+    zones = {"test.google.com": [_a("test.google.com"), _a("*.test.google.com")]}
+    rep = _check(zones, "test.google.com")
+    assert rep.proxied is True
+    assert rep.ips == ["10.0.0.53"]
+    assert rep.reason == "домен и поддомены"
 
 
-def test_check_unknown_domain(rec):
-    proxied, reason = rec.check_domain("unrelated.org")
-    assert proxied is False
-    assert reason
+def test_check_covered_by_parent_wildcard():
+    zones = {"test.google.com": [_a("test.google.com"), _a("*.test.google.com")]}
+    rep = _check(zones, "mail.test.google.com")
+    assert rep.proxied is True
+    assert "wildcard" in rep.reason
+
+
+def test_check_exact_only_zone():
+    zones = {"x.com": [_a("x.com")]}  # только apex
+    rep_apex = _check(zones, "x.com")
+    assert rep_apex.proxied is True
+    assert rep_apex.reason == "только домен"
+    rep_sub = _check(zones, "sub.x.com")  # exact не покрывает поддомены
+    assert rep_sub.proxied is False
+    assert rep_sub.subdomains == []
+
+
+def test_check_wildcard_only_zone():
+    zones = {"y.com": [_a("*.y.com")]}  # только wildcard, без apex
+    rep_apex = _check(zones, "y.com")
+    assert rep_apex.proxied is False  # сам y.com не покрыт *.y.com
+    assert any(h.pattern == "*.y.com" for h in rep_apex.subdomains)
+    assert _check(zones, "a.y.com").proxied is True
+
+
+def test_check_nothing_found():
+    rep = _check({}, "foo.bar")
+    assert rep.proxied is False
+    assert rep.subdomains == []
 
 
 # -------------------------------------------------------- смена IP подмены
