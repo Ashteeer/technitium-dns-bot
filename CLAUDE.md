@@ -220,7 +220,7 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
 | `lists.py` | Скачивание и парсинг JSON-списков (`fetch_all`, `extract_domains`, `normalize_list_url` для github.com) |
 | `technitium.py` | Async-клиент HTTP API Technitium (`set_spoof`, зоны, записи, `parse_zone_spoof`) |
 | `rules.py` | Генерация `rules_file` (эффективные правила для внешнего Technitium App) |
-| `reconciler.py` | **Ядро логики**: приоритеты (`_desired`), синхронизация, `check_domain`, `change_spoof_ips`, `flush`, `reload`, `export_rules` |
+| `reconciler.py` | **Ядро логики**: приоритеты (`_desired`), синхронизация, `check_domain`, `change_spoof_ips`, `flush`, `reload`, `cleanup_zones`, `export_rules`, режим App (`manage_zones`) |
 | `bot.py` | Telegram-хендлеры, инлайн-меню, whitelist |
 | `__main__.py` | Точка входа, планировщик (JobQueue), запуск polling |
 
@@ -276,12 +276,16 @@ A/AAAA-записи в зонах, разбираемые `technitium.parse_zone
 - **Конфиг — YAML, списки — JSON.** Конфиг читает человек; формат списков задан
   спецификацией. `config.yaml` — только настройки; эффективные правила бот
   выгружает в `rules_file` (`rules.yaml`).
-- **Курс на Technitium App.** Зоны (`set_spoof`) — текущий механизм подмены, но у
-  него есть предел: авторитативная зона не умеет «форвардить apex, проксируя
-  только поддомены» (apex без A → NODATA). Поэтому бот дополнительно ведёт
-  `rules.yaml` — его читает сторонний Technitium App и сам решает: ответить IP
-  подмены или форварднуть наверх (домена нет в правилах). До появления App подмена
-  продолжает работать через зоны.
+- **Режимы: зоны vs App (`config.manage_zones`).** `true` (по умолчанию) — подмена
+  через авторитативные зоны (`set_spoof`). `false` — **режим App**: бот не трогает
+  зоны, только ведёт `rules.yaml`, а отвечает/форвардит сторонний Technitium App.
+  Зоны имеют предел: не умеют «форвардить apex, проксируя только поддомены» (apex
+  без A → NODATA) — это и решает App. В режиме App пропускаются все вызовы
+  Technitium (apply/sync/change/flush) и startup-ping, а `check_domain` считается
+  по эффективным правилам (`_check_from_rules`), а не по зонам.
+- **Миграция на App.** `Reconciler.cleanup_zones` (`ttbot --cleanup-zones`) удаляет
+  все управляемые зоны, СОХРАНЯЯ state/rules (в отличие от `flush`). Порядок:
+  обновить → `manage_zones: false` → restart → `--cleanup-zones`.
 - **`--flush` / `--reload`.** `Reconciler.flush` — удалить все зоны и правила,
   сбросить состояние (пере-сид IP из конфига). `Reconciler.reload` — перекачать
   списки и заново применить ВСЕ правила. Доступны как `ttbot --flush/--reload`

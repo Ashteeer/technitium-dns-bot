@@ -69,6 +69,7 @@ class Config:
     state_file: Path
     rules_file: Path
     list_fetch_timeout: int = 60
+    manage_zones: bool = True
 
 
 def _require(data: dict, key: str):
@@ -180,4 +181,5 @@ def load_config(path: str | Path) -> Config:
         state_file=state_file,
         rules_file=rules_file,
         list_fetch_timeout=int(data.get("list_fetch_timeout", 60)),
+        manage_zones=bool(data.get("manage_zones", True)),
     )

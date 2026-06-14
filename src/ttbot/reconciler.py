@@ -95,6 +95,8 @@ class Reconciler:
         return apex, wildcard
 
     async def apply_domain(self, domain: str) -> None:
+        if not self.cfg.manage_zones:
+            return  # режим App: зоны не трогаем, правила уходят в rules_file
         apex, wildcard = self._desired(domain)
         await self.client.set_spoof(
             domain, apex, wildcard, self.state.spoof_ipv4, self.state.spoof_ipv6
@@ -145,10 +147,11 @@ class Reconciler:
             self.state.add_list_domains(set(new))
 
         applied = failed = 0
-        for batch in _chunks(new, 100):
-            results = await asyncio.gather(*(self._safe_apply(d) for d in batch))
-            applied += sum(1 for r in results if r)
-            failed += sum(1 for r in results if not r)
+        if self.cfg.manage_zones:
+            for batch in _chunks(new, 100):
+                results = await asyncio.gather(*(self._safe_apply(d) for d in batch))
+                applied += sum(1 for r in results if r)
+                failed += sum(1 for r in results if not r)
 
         log.info(
             "Sync завершён: новых доменов=%d, применено=%d, ошибок=%d.",
@@ -205,10 +208,11 @@ class Reconciler:
         self.state.set_spoof_ips(ipv4, ipv6)
         domains = self.managed_domains()
         applied = failed = 0
-        for batch in _chunks(domains, 100):
-            results = await asyncio.gather(*(self._safe_apply(d) for d in batch))
-            applied += sum(1 for r in results if r)
-            failed += sum(1 for r in results if not r)
+        if self.cfg.manage_zones:
+            for batch in _chunks(domains, 100):
+                results = await asyncio.gather(*(self._safe_apply(d) for d in batch))
+                applied += sum(1 for r in results if r)
+                failed += sum(1 for r in results if not r)
         log.info(
             "Смена IP подмены на %s: пересоздано=%d, ошибок=%d (всего доменов=%d).",
             ", ".join(ipv4 + ipv6),
@@ -228,13 +232,27 @@ class Reconciler:
         число доменов, для которых удалялись зоны.
         """
         domains = self.managed_domains()
-        for batch in _chunks(domains, 100):
-            await asyncio.gather(*(self._safe_delete(d) for d in batch))
+        if self.cfg.manage_zones:
+            for batch in _chunks(domains, 100):
+                await asyncio.gather(*(self._safe_delete(d) for d in batch))
         self.state.user_rules = {}
         self.state.list_domains = set()
         self.state.set_spoof_ips(self.cfg.spoof_ipv4, self.cfg.spoof_ipv6)  # сохраняет
         self.export_rules()
         log.info("Flush: удалены все правила и %d зон.", len(domains))
+        return len(domains)
+
+    async def cleanup_zones(self) -> int:
+        """Удалить все управляемые зоны из Technitium, СОХРАНИВ правила и состояние.
+
+        Шаг миграции на App: после удаления зон Technitium перестаёт быть
+        авторитативным по этим доменам, и запросы обрабатывает App по rules.yaml.
+        В отличие от ``flush`` — не трогает state.json и rules.yaml.
+        """
+        domains = self.managed_domains()
+        for batch in _chunks(domains, 100):
+            await asyncio.gather(*(self._safe_delete(d) for d in batch))
+        log.info("Cleanup: удалено %d зон (правила и состояние сохранены).", len(domains))
         return len(domains)
 
     async def reload(self, session: aiohttp.ClientSession) -> SyncResult:
@@ -275,7 +293,12 @@ class Reconciler:
         2. Какие **поддомены** ``query`` проксируются — перечисляются зоны ниже
            по дереву (например, при проверке ``google.com`` найдётся
            ``*.test.google.com``), с IP из их записей.
+
+        В режиме App (``manage_zones=false``) зон нет — проверка считается по
+        эффективным правилам (то, что увидит App в ``rules.yaml``).
         """
+        if not self.cfg.manage_zones:
+            return self._check_from_rules(query)
         zones = await self.client.list_zones()
         parts = query.split(".")
         # Предки query без TLD: для test.google.com → google.com (не com).
@@ -322,3 +345,37 @@ class Reconciler:
                 subdomains.append(ProxyHit(z, apex=z_apex, wildcard=z_wild, ips=z_ips))
 
         return CheckReport(query, proxied, reason, ips, subdomains)
+
+    def _check_from_rules(self, query: str) -> CheckReport:
+        """Проверка по эффективным правилам (режим App): без обращения к зонам."""
+        ips = self.state.spoof_ipv4 + self.state.spoof_ipv6
+        parts = query.split(".")
+        ancestors = [".".join(parts[i:]) for i in range(1, len(parts) - 1)]
+
+        proxied = False
+        reason = ""
+        report_ips: list[str] = []
+        q_apex, q_wild = self._desired(query)
+        if q_apex:
+            proxied = True
+            report_ips = ips
+            reason = "домен и поддомены" if q_wild else "только домен"
+        else:
+            for parent in ancestors:
+                _, p_wild = self._desired(parent)
+                if p_wild:
+                    proxied = True
+                    report_ips = ips
+                    reason = f"покрыт wildcard `*.{parent}`"
+                    break
+
+        subdomains: list[ProxyHit] = []
+        if q_wild and not q_apex:
+            subdomains.append(ProxyHit(query, apex=False, wildcard=True, ips=ips))
+        for d in sorted(self.state.list_domains | set(self.state.user_rules)):
+            if d.endswith("." + query):
+                d_apex, d_wild = self._desired(d)
+                if d_apex or d_wild:
+                    subdomains.append(ProxyHit(d, apex=d_apex, wildcard=d_wild, ips=ips))
+
+        return CheckReport(query, proxied, reason, report_ips, subdomains)

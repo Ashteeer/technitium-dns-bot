@@ -66,11 +66,14 @@ async def _on_startup(application: Application) -> None:
     application.bot_data["state"] = state
     application.bot_data["reconciler"] = reconciler
 
-    try:
-        zones = await client.ping()
-        log.info("Technitium доступен (%s), зон на сервере: %d", cfg.technitium.url, zones)
-    except TechnitiumError as e:
-        log.error("Не удалось связаться с Technitium API: %s", e)
+    if cfg.manage_zones:
+        try:
+            zones = await client.ping()
+            log.info("Technitium доступен (%s), зон: %d", cfg.technitium.url, zones)
+        except TechnitiumError as e:
+            log.error("Не удалось связаться с Technitium API: %s", e)
+    else:
+        log.info("Режим App: зоны не управляются, правила пишутся в %s", cfg.rules_file)
 
     if application.job_queue is None:
         raise RuntimeError("JobQueue недоступна — установите python-telegram-bot[job-queue].")
@@ -116,6 +119,9 @@ async def _run_oneshot(cfg: Config, action: str) -> None:
         if action == "flush":
             n = await reconciler.flush()
             log.info("Flush выполнен: удалено зон=%d, все правила сброшены.", n)
+        elif action == "cleanup-zones":
+            n = await reconciler.cleanup_zones()
+            log.info("Cleanup выполнен: удалено зон=%d (правила сохранены).", n)
         else:  # reload
             res = await reconciler.reload(session)
             log.info(
@@ -163,6 +169,11 @@ def main(argv=None) -> int:
         action="store_true",
         help="перекачать списки и заново применить все правила, и выйти",
     )
+    group.add_argument(
+        "--cleanup-zones",
+        action="store_true",
+        help="удалить все управляемые зоны Technitium (правила сохранить), и выйти",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -179,9 +190,16 @@ def main(argv=None) -> int:
         log.error("Ошибка конфигурации: %s", e)
         return 2
 
-    if args.flush or args.reload:
+    action = None
+    if args.flush:
+        action = "flush"
+    elif args.reload:
+        action = "reload"
+    elif args.cleanup_zones:
+        action = "cleanup-zones"
+    if action:
         try:
-            asyncio.run(_run_oneshot(cfg, "flush" if args.flush else "reload"))
+            asyncio.run(_run_oneshot(cfg, action))
         except TechnitiumError as e:
             log.error("Ошибка Technitium: %s", e)
             return 1

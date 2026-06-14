@@ -66,7 +66,8 @@ class _FakeZonesClient:
 
 
 def _check(zones: dict, query: str):
-    rec = Reconciler(cfg=None, client=_FakeZonesClient(zones), state=None)
+    cfg = SimpleNamespace(manage_zones=True)
+    rec = Reconciler(cfg=cfg, client=_FakeZonesClient(zones), state=None)
     return asyncio.run(rec.check_domain(query))
 
 
@@ -150,13 +151,14 @@ class _FakeClient:
         self.deleted.append(zone)
 
 
-def _cfg(tmp_path):
+def _cfg(tmp_path, manage_zones=True):
     return SimpleNamespace(
         rules_file=tmp_path / "rules.yaml",
         spoof_ipv4=["9.9.9.9"],
         spoof_ipv6=[],
         blocklists=[],
         list_fetch_timeout=60,
+        manage_zones=manage_zones,
     )
 
 
@@ -216,3 +218,47 @@ def test_reload_reapplies_all_and_writes_rules(tmp_path, state):
     assert res.applied == 2
     assert {c[0] for c in client.calls} == {"a.com", "b.com"}
     assert (tmp_path / "rules.yaml").exists()
+
+
+# ----------------------------------------------------------- режим App
+def test_app_mode_does_not_touch_zones(tmp_path, state):
+    client = _FakeClient()
+    rec = Reconciler(cfg=_cfg(tmp_path, manage_zones=False), client=client, state=state)
+    state.set_spoof_ips(["1.1.1.1"], [])
+
+    asyncio.run(rec.user_add("a.com", WILDCARD))
+    asyncio.run(rec.change_spoof_ips(["2.2.2.2"], []))
+
+    assert client.calls == []  # set_spoof не вызывался
+    assert client.deleted == []  # delete_zone не вызывался
+    assert (tmp_path / "rules.yaml").exists()  # но правила выгружены
+
+
+def test_app_mode_check_from_rules_twitch_case(tmp_path, state):
+    # twitch.tv в списке (wildcard), пользователь exact-block @twitch.tv.
+    rec = Reconciler(cfg=_cfg(tmp_path, manage_zones=False), client=None, state=state)
+    state.list_domains = {"twitch.tv"}
+    state.set_rule("twitch.tv", "block", EXACT)
+    state.set_spoof_ips(["1.1.1.1"], [])
+
+    rep = asyncio.run(rec.check_domain("twitch.tv"))  # client=None → API не трогаем
+
+    assert rep.proxied is False  # сам twitch.tv форвардится наверх
+    assert [(h.domain, h.apex, h.wildcard) for h in rep.subdomains] == [
+        ("twitch.tv", False, True)  # *.twitch.tv остаётся в подмене
+    ]
+
+
+def test_cleanup_zones_keeps_state(tmp_path, state):
+    client = _FakeClient()
+    rec = Reconciler(cfg=_cfg(tmp_path), client=client, state=state)
+    state.list_domains = {"a.com"}
+    state.set_rule("b.com", "add", WILDCARD)
+
+    n = asyncio.run(rec.cleanup_zones())
+
+    assert n == 2
+    assert set(client.deleted) == {"a.com", "b.com"}
+    # состояние НЕ сброшено (в отличие от flush)
+    assert state.list_domains == {"a.com"}
+    assert [r.domain for r in state.list_rules()] == ["b.com"]

@@ -31,6 +31,7 @@ ttbot — управление сервисом Technitium DNS spoofing bot
   ttbot --update [версия]    обновить с GitHub (по умолчанию — последняя)
   ttbot --reload             перекачать списки и заново применить все правила
   ttbot --flush [-y]         удалить ВСЕ правила и зоны, сбросить состояние
+  ttbot --cleanup-zones      удалить зоны Technitium, сохранив правила (миграция на App)
   ttbot start | stop | restart
   ttbot status               статус сервиса
   ttbot logs [N]             логи (следим за хвостом, N строк истории)
@@ -93,7 +94,8 @@ main() {
     local cmd="${1:-help}"
 
     case "$cmd" in
-        start | stop | restart | --update | update | --reload | reload | --flush | flush | logs)
+        start | stop | restart | --update | update | --reload | reload | --flush | flush \
+            | --cleanup-zones | cleanup-zones | logs)
             if [ "$(id -u)" -ne 0 ]; then
                 exec sudo -- "$0" "$@"
             fi
@@ -105,6 +107,9 @@ main() {
         --update | update) do_update "${2:-}" ;;
         --reload | reload) run_oneshot reload ;;
         --flush | flush) do_flush "${2:-}" ;;
+        --cleanup-zones | cleanup-zones)
+            "$PY" -m ttbot --cleanup-zones --config "$CONFIG"
+            ;;
         start | stop | restart)
             systemctl "$cmd" "$SERVICE"
             systemctl is-active --quiet "$SERVICE" \
